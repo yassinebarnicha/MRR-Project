@@ -1,0 +1,1344 @@
+---
+title: "Projet_final"
+output: html_document
+date: "2023-12-16"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# EDA and feature selection :
+
+## EDA:
+
+### importing data :
+
+```{r}
+library(MASS)
+library(caret)
+library(tidyr)
+
+
+data = read.csv('data.csv',header=TRUE,sep=',')
+head(data)
+```
+
+```{r}
+str(data)
+```
+
+We have 171 observations of 1203 variables and 1 binary target variable, most of the explanatory variables are numeric with a mix of continuous and discrete types and varied scales
+
+```{r}
+data$Class
+```
+
+We're in front of a binary target variable where the need to change the toxic label to 1 and the one left to 0.
+
+```{r}
+data$Class<- ifelse(data$Class == "Toxic",1,0)
+
+```
+
+```{r}
+data$Class
+```
+
+```{r}
+library(ggplot2)
+ggplot(data, aes(x = Class)) + geom_bar()
+```
+
+The Majority Class is the 0's class which consists 67,25% of data\$Class.
+
+The imbalanced distribution of the target variable is to take to consideration when performing Kfolds(Stratification)
+
+```{r}
+mol  = data[,c(1100,10)]#1:10
+summary(mol)
+```
+
+the means that varies are a strong hint for scaling data.
+
+```{r}
+significant_with_zeros <- data.frame(
+  MDEC.14 = data$MDEC.14,
+  nAcid = data$nAcid,
+  Class = data$Class
+)
+boxplot(significant_with_zeros$MDEC.14, significant_with_zeros$nAcid, 
+        names = c("MDEC.14", "nAcid"),
+        main = "Boxplot of MDEC.14 and nAcid")
+```
+
+some variables consists of high percentages of 0 values wich can lead to problems when scaling data .
+
+SO:
+
+## Feature selection : 
+
+###  data scaling and filtering :
+
+```{r}
+library(MASS)
+library(caret)
+set.seed(123) 
+
+train_indices = createDataPartition(data$Class, p = 0.75, list = FALSE)
+X_train = data[train_indices, -ncol(data)]
+Y_train = data$Class[train_indices]
+X_test = data[-train_indices,-ncol(data)]
+Y_test = data$Class[-train_indices]
+
+
+
+zero_percentage = colSums(X_train == 0) / nrow(X_train) * 100
+columns_to_select = zero_percentage >= 85
+
+data<-data[,!columns_to_select]
+
+X_train_wo_0 = X_train[,!columns_to_select] 
+X_test_wo_0 = X_test[,!columns_to_select]
+X_train_scaled =scale(X_train_wo_0,center=TRUE,scale=TRUE)
+train_means <- attr(X_train_scaled, "scaled:center") # getting the means.
+train_sds <- attr(X_train_scaled, "scaled:scale") # getting the stds.
+X_test_scaled =  scale(X_test_wo_0 ,center = train_means, scale = train_sds)
+
+train_data <- as.data.frame(cbind(X_train_scaled, Class = Y_train))
+test_data <- as.data.frame(cbind(X_test_scaled, Class = Y_test))
+
+str(data)
+```
+
+we;re stuck with 1052 variables with the target variable .
+
+### STUDENT T TEST:
+
+we're going to perform a t test on each column Xi to see if there is a difference between E(Xi=xi/Y=0) and E(Xi=xi/Y=1), and so we can have a better understanding on whether the column Xi is significant for our analysis or not.
+
+```{r}
+
+# Initialize lists to store t-statistics and p-values
+t_statistics <- vector("list", 1051)
+p_values <- vector("list", 1051)
+
+# Loop through each column
+for (i in 1:1051) {
+  xi <- data[, i]
+  y <- data$Class
+
+  # Separate the data into two groups
+  Y0list <- xi[y == 0]
+  Y1list <- xi[y == 1]
+
+  # Calculate means and standard deviations for each group
+  mean0 <- mean(Y0list, na.rm = TRUE)
+  std0 <- sd(Y0list, na.rm = TRUE)
+  n0 <- sum(!is.na(Y0list))
+
+  mean1 <- mean(Y1list, na.rm = TRUE)
+  std1 <- sd(Y1list, na.rm = TRUE)
+  n1 <- sum(!is.na(Y1list))
+
+  # Calculate t-statistic
+  t_statistic <- (mean0 - mean1) / sqrt((std0^2 / n0) + (std1^2 / n1))
+  t_statistics[[i]] <- t_statistic
+
+  # Calculate degrees of freedom
+  df <- ((std0^2 / n0) + (std1^2 / n1))^2 / ((std0^2 / n0)^2 / (n0 - 1) + (std1^2 / n1)^2 / (n1 - 1))
+
+  # Calculate p-value
+  p_value <- 2 * pt(-abs(t_statistic), df)
+  p_values[[i]] <- p_value
+}
+
+# Combine results into a dataframe
+test_results <- data.frame(Column = 1:1051, T_Statistic = unlist(t_statistics), P_Value = unlist(p_values))
+
+names(data[,cbind(test_results$Column[test_results$P_Value<0.05])])
+length(data[,cbind(test_results$Column[test_results$P_Value<0.05])])
+test_results[test_results$P_Value<0.05,]
+```
+
+the 34 variables of student t test : [1] "minHBint4" "ECCEN" "MDEC.23" "SP.6" "SP.5" "SpAD_Dt" "AATS8v" "SpMax4_Bhm" "ETA_Eta_F_L" "SpDiam_Dt" [11] "nC" "naAromAtom" "SpMin3_Bhe" "SpMin3_Bhm" "SpMin3_Bhi" "nHaaCH" "ETA_Beta" "EE_Dt" "nBondsD" "ETA_Beta_ns" [21] "C2SP2" "GATS7v" "SpMin4_Bhs" "SpMin4_Bhi" "SpMin4_Bhe" "SpMax_Dt" "MLogP" "nwHBa" "khs.aaCH" "ZMIC1" [31] "C3SP2" "naaCH" "SpMAD_Dt" "WTPT.1"
+
+### PCA:
+
+```{r}
+# Load necessary library
+library(readr)
+
+
+
+
+pcadata = read.csv('data.csv',header=TRUE,sep=',')
+
+
+pca_result <- prcomp(pcadata[,-ncol(pcadata)], center = TRUE, scale. = TRUE)
+
+
+# Display the principal components
+print(principal_components)
+
+# Step 2: Obtain Variance Explained
+pca_summary <- summary(pca_result)
+
+# Extracting the proportion of variance explained
+var_explained <- pca_summary$importance[2,]
+
+# Calculate the cumulative variance explained
+cum_var_explained <- cumsum(var_explained)
+
+# Determine the number of components to retain based on a cumulative threshold
+threshold <- 0.9  # Set the threshold for cumulative variance explained
+num_components <- which(cum_var_explained >= threshold)[1]
+
+# Select the number of principal components that explain the cumulative variance above the threshold
+principal_components <- pca_result$x[, 1:num_components]
+
+# Print the number of components retained
+print(paste("Number of components to retain: ", num_components))
+
+
+
+# Step 3: Create a Bar Plot
+barplot(var_explained, main = "PCA - Variance Explained by Each Principal Component",
+        xlab = "Principal Component", ylab = "Proportion of Variance Explained",
+        col = "blue")
+
+```
+
+```{r}
+
+pcadf <-as.data.frame(principal_components)
+
+pcadf$Class<-pcadata$Class
+pcadf$Class<- ifelse(pcadf$Class == "Toxic",1,0)
+# Select the desired number of principal components
+str(pcadf)
+```
+
+```{r}
+pcadf$Class
+```
+
+```{r}
+set.seed(123) 
+
+train_indices = createDataPartition(data$Class, p = 0.75, list = FALSE)
+pca_train <- pcadf[train_indices ,]
+pca_test <- pcadf[-train_indices ,]
+```
+
+# 
+
+# Naive model :(using glm )
+
+## 1.the whole data set :
+
+```{r}
+# Train a logistic regression model (you can use other models as well)
+
+model0 <- glm(Class ~ ., data = train_data, family = 'binomial')
+summary(model0)
+
+```
+
+```         
+Warning: glm.fit: algorithm did not converge
+```
+
+```{r}
+
+# Predict on the test set
+predictions0 <- predict.glm(model0, newdata = train_data[,-ncol(train_data)], type = "response")
+predictedClass0 <- ifelse(predictions0 > 0.5, 1, 0)
+
+#cat("\n Probabilities predicted:\n ",predictions0,"\n Predicted Class: \n",predictedClass0,"\n Real Class \n",test_data$Class,'\n')
+
+conf_matrix0 <- table(Predicted = predictedClass0, Actual = train_data$Class)
+
+
+
+TP0 <- conf_matrix0[2, 2]
+TN0 <- conf_matrix0[1, 1]
+FP0 <- conf_matrix0[1, 2]
+FN0 <- conf_matrix0[2, 1]
+
+conf_matrix0
+list(TP = TP0, TN = TN0, FP = FP0, FN = FN0)
+
+recall0 <- TP0 / (TP0 + FN0)
+precision0 <- TP0 / (TP0 + FP0)
+f1_score0 <- 2 * (precision0 * recall0) / (precision0 + recall0)
+accuracy0 <- (TP0 + TN0) / (TP0 + TN0 + FP0 + FN0)
+specificity0 <- TN0 / (TN0 + FP0)
+
+# Print the results
+cat("Recall:", recall0, "\n")
+cat("Precision:", precision0, "\n")
+cat("F1 Score:", f1_score0, "\n")
+cat("Accuracy:", accuracy0, "\n")
+cat("Specificity:", specificity0, "\n")
+```
+
+la plupart des p-values sont fixees a 1 , les autres sont nuls, ceci est due aux faite que p\>\>n, la multicolinearite . Pourtant on a calcule les statistiques comparatives .
+
+```{r}
+# Predict on the test set
+predictions0 <- predict.glm(model0, newdata = test_data[,-ncol(test_data)], type = "response")
+predictedClass0 <- ifelse(predictions0 > 0.5, 1, 0)
+
+#cat("\n Probabilities predicted:\n ",predictions0,"\n Predicted Class: \n",predictedClass0,"\n Real Class \n",test_data$Class,'\n')
+
+conf_matrix0 <- table(Predicted = predictedClass0, Actual = test_data$Class)
+
+
+
+TP0 <- conf_matrix0[2, 2]
+TN0 <- conf_matrix0[1, 1]
+FP0 <- conf_matrix0[1, 2]
+FN0 <- conf_matrix0[2, 1]
+
+conf_matrix0
+list(TP = TP0, TN = TN0, FP = FP0, FN = FN0)
+
+recall0 <- TP0 / (TP0 + FN0)
+precision0 <- TP0 / (TP0 + FP0)
+f1_score0 <- 2 * (precision0 * recall0) / (precision0 + recall0)
+accuracy0 <- (TP0 + TN0) / (TP0 + TN0 + FP0 + FN0)
+specificity0 <- TN0 / (TN0 + FP0)
+
+# Print the results
+cat("Recall:", recall0, "\n")
+cat("Precision:", precision0, "\n")
+cat("F1 Score:", f1_score0, "\n")
+cat("Accuracy:", accuracy0, "\n")
+cat("Specificity:", specificity0, "\n")
+```
+
+## 2.using student test features : 
+
+```{r}
+data_train_student<-train_data[,cbind(test_results$Column[test_results$P_Value<0.05])]
+data_train_student$Class<-train_data$Class
+
+data_test_student<-test_data[,cbind(test_results$Column[test_results$P_Value<0.05])]
+data_test_student$Class<-test_data$Class
+
+
+```
+
+```{r}
+# Train a logistic regression model (you can use other models as well)
+model1 <- glm(Class ~., data = data_train_student, family = 'binomial')
+summary(model1)
+```
+
+```{r}
+# Predict on the train set
+predictions1 <- predict(model1, newdata = data_train_student, type = "response")
+predictedClass1 <- ifelse(predictions1 > 0.5, 1, 0)
+
+#cat("\n Probabilities predicted:\n ",predictions1,"\n Predicted Class: \n",predictedClass1,"\n Real Class \n",data_train_student$Class,'\n')
+
+conf_matrix1 <- table(Predicted = predictedClass1, Actual = data_train_student$Class)
+
+
+
+TP <- conf_matrix1[2, 2]
+TN <- conf_matrix1[1, 1]
+FP <- conf_matrix1[1, 2]
+FN <- conf_matrix1[2, 1]
+
+conf_matrix1
+list(TP = TP, TN = TN, FP = FP, FN = FN)
+
+recall <- TP / (TP + FN)
+precision <- TP / (TP + FP)
+f1_score <- 2 * (precision * recall) / (precision + recall)
+accuracy <- (TP + TN) / (TP + TN + FP + FN)
+specificity <- TN / (TN + FP)
+
+# Print the results
+cat("Recall:", recall, "\n")
+cat("Precision:", precision, "\n")
+cat("F1 Score:", f1_score, "\n")
+cat("Accuracy:", accuracy, "\n")
+cat("Specificity:", specificity, "\n")
+```
+
+```{r}
+# Predict on the test set
+predictions1 <- predict(model1, newdata = data_test_student, type = "response")
+predictedClass1 <- ifelse(predictions1 > 0.5, 1, 0)
+
+cat("\n Probabilities predicted:\n ",predictions1,"\n Predicted Class: \n",predictedClass1,"\n Real Class \n",data_test_student$Class,'\n')
+
+conf_matrix1 <- table(Predicted = predictedClass1, Actual = data_test_student$Class)
+
+
+
+TP <- conf_matrix1[2, 2]
+TN <- conf_matrix1[1, 1]
+FP <- conf_matrix1[1, 2]
+FN <- conf_matrix1[2, 1]
+
+conf_matrix1
+list(TP = TP, TN = TN, FP = FP, FN = FN)
+
+recall <- TP / (TP + FN)
+precision <- TP / (TP + FP)
+f1_score <- 2 * (precision * recall) / (precision + recall)
+accuracy <- (TP + TN) / (TP + TN + FP + FN)
+specificity <- TN / (TN + FP)
+
+# Print the results
+cat("Recall:", recall, "\n")
+cat("Precision:", precision, "\n")
+cat("F1 Score:", f1_score, "\n")
+cat("Accuracy:", accuracy, "\n")
+cat("Specificity:", specificity, "\n")
+```
+
+```         
+Recall: 0.3333333  Precision: 0.4615385  F1 Score: 0.3870968  Accuracy: 0.547619  Specificity: 0.7083333 
+```
+
+Slightly better results than the naive model.
+
+there some NA values : checking for mutlicolinearity :
+
+```{r}
+library(reshape2)
+correlation_matrix<-cor(data_train_student[,-ncol(data_train_student)])
+
+# Convert the matrix to a long format for ggplot2
+long_corr_matrix <- melt(correlation_matrix)
+
+# Create the heatmap
+ggplot(long_corr_matrix, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0, limit = c(-1, 1), space = "Lab") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, size = 6),
+        axis.text.y = element_text(size = 6))
+```
+
+## 3.using PCA features:
+
+```{r}
+
+
+modelpca <- glm(Class ~., data = pca_train, family = 'binomial')
+summary(modelpca)
+```
+
+```{r}
+# Predict on the train set
+predictions1 <- predict(modelpca, newdata = pca_train, type = "response")
+predictedClass1 <- ifelse(predictions1 > 0.5, 1, 0)
+
+#cat("\n Probabilities predicted:\n ",predictions1,"\n Predicted Class: \n",predictedClass1,"\n Real Class \n",data_train_student$Class,'\n')
+
+conf_matrix1 <- table(Predicted = predictedClass1, Actual = pca_train$Class)
+
+
+
+TP <- conf_matrix1[2, 2]
+TN <- conf_matrix1[1, 1]
+FP <- conf_matrix1[1, 2]
+FN <- conf_matrix1[2, 1]
+
+conf_matrix1
+list(TP = TP, TN = TN, FP = FP, FN = FN)
+
+recall <- TP / (TP + FN)
+precision <- TP / (TP + FP)
+f1_score <- 2 * (precision * recall) / (precision + recall)
+accuracy <- (TP + TN) / (TP + TN + FP + FN)
+specificity <- TN / (TN + FP)
+
+# Print the results
+cat("Recall:", recall, "\n")
+cat("Precision:", precision, "\n")
+cat("F1 Score:", f1_score, "\n")
+cat("Accuracy:", accuracy, "\n")
+cat("Specificity:", specificity, "\n")
+```
+
+```         
+PC40
+Recall: 0.7105263  Precision: 0.627907  F1 Score: 0.6666667  Accuracy: 0.7906977  Specificity: 0.8241758 
+```
+
+```{r}
+
+predictions1 <- predict(modelpca, newdata = pca_test, type = "response")
+predictedClass1 <- ifelse(predictions1 > 0.5, 1, 0)
+
+#cat("\n Probabilities predicted:\n ",predictions1,"\n Predicted Class: \n",predictedClass1,"\n Real Class \n",data_train_student$Class,'\n')
+
+conf_matrix1 <- table(Predicted = predictedClass1, Actual = pca_test$Class)
+
+
+
+TP <- conf_matrix1[2, 2]
+TN <- conf_matrix1[1, 1]
+FP <- conf_matrix1[1, 2]
+FN <- conf_matrix1[2, 1]
+
+conf_matrix1
+list(TP = TP, TN = TN, FP = FP, FN = FN)
+
+recall <- TP / (TP + FN)
+precision <- TP / (TP + FP)
+f1_score <- 2 * (precision * recall) / (precision + recall)
+accuracy <- (TP + TN) / (TP + TN + FP + FN)
+specificity <- TN / (TN + FP)
+
+# Print the results
+cat("Recall:", recall, "\n")
+cat("Precision:", precision, "\n")
+cat("F1 Score:", f1_score, "\n")
+cat("Accuracy:", accuracy, "\n")
+cat("Specificity:", specificity, "\n")
+```
+
+```         
+PC10
+Recall: 0.1666667  Precision: 0.07692308  F1 Score: 0.1052632  Accuracy: 0.5952381  Specificity: 0.6666667 
+```
+
+```         
+PC42 (obtained using a threshold of 0.9 on Variance explanation cumsum )
+Recall: 0.4117647  Precision: 0.5384615  F1 Score: 0.4666667  Accuracy: 0.6190476  Specificity: 0.76 
+```
+
+```         
+PC40  
+Recall: 0.375  Precision: 0.4615385  F1 Score: 0.4137931  Accuracy: 0.5952381  Specificity: 0.7307692 
+```
+
+```         
+PC72
+Recall: 0.25  Precision: 0.3846154  F1 Score: 0.3030303  Accuracy: 0.452381  Specificity: 0.6363636 
+```
+
+```{r}
+
+```
+
+```{r}
+library(caret)
+library(glmnet)
+
+# Assuming pcadf is your PCA data frame with Class as 0 or 1
+set.seed(123) # for reproducibility
+
+# Create stratified folds
+folds <- createFolds(pcadf$Class, k = 10, list = TRUE, returnTrain = TRUE)
+
+# Initialize vectors to store metrics
+train_accuracy <- vector("list", length = 10)
+test_accuracy <- vector("list", length = 10)
+train_recall <- vector("list", length = 10)
+test_recall <- vector("list", length = 10)
+
+for(i in 1:10) {
+  # Split the data into training and test sets
+  pca_train <- pcadf[folds[[i]], ]
+  pca_test <- pcadf[-folds[[i]], ]
+  
+  # Fit the logistic regression model
+  modelpca <- glm(Class ~., data = pca_train, family = 'binomial')
+  
+  # Predictions and class assignments for train data
+  predictions_train <- predict(modelpca, newdata = pca_train, type = "response")
+  predictedClass_train <- ifelse(predictions_train > 0.5, 1, 0)
+  
+  # Predictions and class assignments for test data
+  predictions_test <- predict(modelpca, newdata = pca_test, type = "response")
+  predictedClass_test <- ifelse(predictions_test > 0.5, 1, 0)
+  
+  # Calculate accuracy and recall for train data
+  train_accuracy[[i]] <- mean(predictedClass_train == pca_train$Class)
+  train_recall[[i]] <- sum(predictedClass_train == 1 & pca_train$Class == 1) /
+                       sum(pca_train$Class == 1)
+  
+  # Calculate accuracy and recall for test data
+  test_accuracy[[i]] <- mean(predictedClass_test == pca_test$Class)
+  test_recall[[i]] <- sum(predictedClass_test == 1 & pca_test$Class == 1) /
+                      sum(pca_test$Class == 1)
+}
+
+# Convert lists to numeric vectors for plotting
+train_accuracy <- unlist(train_accuracy)
+test_accuracy <- unlist(test_accuracy)
+train_recall <- unlist(train_recall)
+test_recall <- unlist(test_recall)
+
+# Plot boxplots for accuracy
+par(mfrow = c(1, 2))
+boxplot(train_accuracy, main = "Training Accuracy", ylim = c(0, 1))
+boxplot(test_accuracy, main = "Test Accuracy", ylim = c(0, 1))
+par(mfrow = c(1, 2))
+# Plot boxplots for recall
+boxplot(train_recall, main = "Training Recall", ylim = c(0, 1))
+boxplot(test_recall, main = "Test Recall", ylim = c(0, 1))
+
+```
+
+# Model selection :
+
+## forward selection :
+
+```{r}
+forwardmodel<-glm(formula = Class ~   MATS8c + SpMax4_Bhm + 
+    AATSC8i + SpMax1_Bhm + minssNH + GATS4s + 
+    + khs.ssNH + ALogp2 + AATSC8p + AATSC8s + ATSC3v + 
+    SaasN + n5HeteroRing + ALogP + MATS7s + n5Ring + maxHCsatu + 
+    ATSC7c + nAtomLC + minsCH3 + mindsN, family = "binomial", 
+    data = train_data)
+summary(forwardmodel)
+```
+
+```{r}
+# Predict on the test set
+predictions0 <- predict.glm(forwardmodel, newdata = train_data[,-ncol(train_data)], type = "response")
+predictedClass0 <- ifelse(predictions0 > 0.5, 1, 0)
+
+#cat("\n Probabilities predicted:\n ",predictions0,"\n Predicted Class: \n",predictedClass0,"\n Real Class \n",test_data$Class,'\n')
+
+conf_matrix0 <- table(Predicted = predictedClass0, Actual = train_data$Class)
+
+
+
+TP0 <- conf_matrix0[2, 2]
+TN0 <- conf_matrix0[1, 1]
+FP0 <- conf_matrix0[1, 2]
+FN0 <- conf_matrix0[2, 1]
+
+conf_matrix0
+list(TP = TP0, TN = TN0, FP = FP0, FN = FN0)
+
+recall0 <- TP0 / (TP0 + FN0)
+precision0 <- TP0 / (TP0 + FP0)
+f1_score0 <- 2 * (precision0 * recall0) / (precision0 + recall0)
+accuracy0 <- (TP0 + TN0) / (TP0 + TN0 + FP0 + FN0)
+specificity0 <- TN0 / (TN0 + FP0)
+
+# Print the results
+cat("Recall:", recall0, "\n")
+cat("Precision:", precision0, "\n")
+cat("F1 Score:", f1_score0, "\n")
+cat("Accuracy:", accuracy0, "\n")
+cat("Specificity:", specificity0, "\n")
+```
+
+```{r}
+# Predict on the test set
+predictions0 <- predict.glm(forwardmodel, newdata = test_data[,-ncol(test_data)], type = "response")
+predictedClass0 <- ifelse(predictions0 > 0.5, 1, 0)
+
+#cat("\n Probabilities predicted:\n ",predictions0,"\n Predicted Class: \n",predictedClass0,"\n Real Class \n",test_data$Class,'\n')
+
+conf_matrix0 <- table(Predicted = predictedClass0, Actual = test_data$Class)
+
+
+
+TP0 <- conf_matrix0[2, 2]
+TN0 <- conf_matrix0[1, 1]
+FP0 <- conf_matrix0[1, 2]
+FN0 <- conf_matrix0[2, 1]
+
+conf_matrix0
+list(TP = TP0, TN = TN0, FP = FP0, FN = FN0)
+
+recall0 <- TP0 / (TP0 + FN0)
+precision0 <- TP0 / (TP0 + FP0)
+f1_score0 <- 2 * (precision0 * recall0) / (precision0 + recall0)
+accuracy0 <- (TP0 + TN0) / (TP0 + TN0 + FP0 + FN0)
+specificity0 <- TN0 / (TN0 + FP0)
+
+# Print the results
+cat("Recall:", recall0, "\n")
+cat("Precision:", precision0, "\n")
+cat("F1 Score:", f1_score0, "\n")
+cat("Accuracy:", accuracy0, "\n")
+cat("Specificity:", specificity0, "\n")
+```
+
+```{r}
+
+```
+
+## Logistic Regression on the entire dataset with regularization:
+
+### 1.RIDGE: 
+
+```{r}
+library(glmnet)
+library(caret)
+
+set.seed(123)  # Ensure reproducibility
+
+
+ridgemod = glmnet(X_train_scaled,Y_train,alpha=0, family ='binomial')
+plot(ridgemod,xvar='lambda')
+
+
+cv_fit <- cv.glmnet(as.matrix(X_train_scaled), Y_train, alpha = 0, 
+                    type.measure = "deviance", nfolds = 10,grouped = FALSE)
+
+# Extracting lambda.min and lambda.1se
+lambda_min <- cv_fit$lambda.min
+lambda_1se <- cv_fit$lambda.1se
+lambda_min
+```
+
+```{r}
+model_min <- glmnet(as.matrix(X_train_scaled), Y_train, alpha = 0, lambda = lambda_min)
+model_1se <- glmnet(as.matrix(X_train_scaled), Y_train, alpha = 0, lambda = lambda_1se)
+
+
+```
+
+```{r}
+
+# Assuming you have a cv.glmnet object named cv_fit
+# Extract the cross-validated mean deviance and the lambda values
+mean_deviance <- cv_fit$cvm
+log_lambdas <- log(cv_fit$lambda)
+
+# Plot the mean deviance against log(lambda)
+plot(log_lambdas, mean_deviance, type = "b", pch = 20, xlab = "Log(λ)", ylab = "Mean Deviance",
+     main = "Cross-Validated Mean Deviance vs. Log-Lambda")
+
+# Optionally, you can add vertical lines for lambda.min and lambda.1se
+abline(v = log(cv_fit$lambda.min), col = "blue", lty = 2)
+
+
+# Add a legend if desired
+legend("topright", legend = c("lambda.min"), col = c("blue"), lty = 2)
+
+```
+
+```{r}
+# Predictions
+predictions_min <- predict(model_min, s = lambda_min, newx = X_test_scaled, type = "response")
+predictions_1se <- predict(model_1se, s = lambda_1se, newx = X_test_scaled, type = "response")
+
+# Converting predictions to binary class labels based on a threshold (e.g., 0.5)
+# You might need to adjust this based on your specific case
+prediction_min <- ifelse(predictions_min > 0.5, 1, 0)
+prediction_1se <- ifelse(predictions_1se > 0.5, 1, 0)
+
+# Confusion Matrices
+confusion_min <- table(Predicted = prediction_min, Actual = Y_test)
+confusion_1se <- table(Predicted = prediction_1se, Actual = Y_test)
+
+
+print(confusion_min)
+
+print(confusion_1se)
+
+# Adjusted calculations for confusion_min
+TN_min <- confusion_min[1, 1]
+FP_min <- confusion_min[1, 2]
+FN_min <- 0  # No false negatives since there are no positive predictions
+TP_min <- 0  # No true positives for the same reason
+
+# Calculate accuracy and specificity
+accuracy_min <- (TP_min + TN_min) / (TP_min + TN_min + FP_min + FN_min)
+specificity_min <- TN_min / (TN_min + FP_min)
+
+# Print the results for confusion_min
+cat("Metrics for confusion_min:\n")
+cat("Accuracy:", accuracy_min, "\n")
+cat("Specificity:", specificity_min, "\n")
+
+
+# Adjusted calculations for confusion_1se
+# Assuming confusion_1se has the same structure
+TN_1se <- confusion_1se[1, 1]
+FP_1se <- confusion_1se[1, 2]
+FN_1se <- 0
+TP_1se <- 0
+
+# Calculate accuracy and specificity
+accuracy_1se <- (TP_1se + TN_1se) / (TP_1se + TN_1se + FP_1se + FN_1se)
+specificity_1se <- TN_1se / (TN_1se + FP_1se)
+
+# Print the results for confusion_1se
+cat("Metrics for confusion_1se:\n")
+cat("Accuracy:", accuracy_1se, "\n")
+cat("Specificity:", specificity_1se, "\n")
+
+
+
+
+```
+
+the missing 1 class is due to the fact that :
+
+Prediction probablities are below 0.5 :
+
+```{r}
+predictions_min
+predictions_1se
+```
+
+let's see if it's just a one timer :
+
+```{r}
+
+perform_k_fold_ridge_cv <- function(data, k) {
+  set.seed(123) # for reproducibility
+
+  # Create stratified folds
+  folds <- caret::createFolds(data$Class, k = k, list = TRUE)
+
+  train_accuracy_list <- numeric(k)
+  test_accuracy_list <- numeric(k)
+  train_recall_list <- numeric(k)  # To store train recall for each fold
+  test_recall_list <- numeric(k)   # To store test recall for each fold
+
+  for(i in 1:k) {
+    # Adjusting indices for stratified folds
+    test_indices <- folds[[i]]
+    
+    X_train = data[-test_indices, -ncol(data)]
+    Y_train = data$Class[-test_indices]
+    X_test = data[test_indices,-ncol(data)]
+    Y_test = data$Class[test_indices]
+    Y_test <- ifelse(Y_test == "Toxic", 1, 0)
+    Y_train <- ifelse(Y_train == "Toxic", 1, 0)
+
+    zero_percentage = colSums(X_train == 0) / nrow(X_train) * 100
+    columns_to_select = zero_percentage < 85  # Should be < 85 to select columns less than 85% zeros
+
+    X_train_wo_0 = X_train[, columns_to_select] 
+    X_test_wo_0 = X_test[, columns_to_select]
+    X_train_scaled = scale(X_train_wo_0, center = TRUE, scale = TRUE)
+    train_means <- attr(X_train_scaled, "scaled:center") # getting the means.
+    train_sds <- attr(X_train_scaled, "scaled:scale") # getting the stds.
+    X_test_scaled = scale(X_test_wo_0, center = train_means, scale = train_sds)
+
+    cv_ridge <- cv.glmnet(X_train_scaled, Y_train, alpha = 0, family = "binomial", grouped = FALSE)
+    lambda_min <- cv_ridge$lambda.min
+    ridge_min <- glmnet(X_train_scaled, Y_train, alpha = 0, lambda = lambda_min, family = 'binomial')
+
+    yhat_train <- predict(ridge_min, X_train_scaled, type = "response")
+    binary_predictions_train <- ifelse(yhat_train > 0.5, 1, 0)
+    train_accuracy_list[i] <- mean(binary_predictions_train == Y_train)
+    
+    # Calculate recall for the training set
+    TP_train <- sum(binary_predictions_train == 1 & Y_train == 1)
+    FN_train <- sum(binary_predictions_train == 0 & Y_train == 1)
+    train_recall_list[i] <- TP_train / (TP_train + FN_train)
+
+    yhat_test <- predict(ridge_min, X_test_scaled, type = "response")
+    binary_predictions_test <- ifelse(yhat_test > 0.5, 1, 0)
+    test_accuracy_list[i] <- mean(binary_predictions_test == Y_test)
+    
+    # Calculate recall for the test set
+    TP_test <- sum(binary_predictions_test == 1 & Y_test == 1)
+    FN_test <- sum(binary_predictions_test == 0 & Y_test == 1)
+    test_recall_list[i] <- TP_test / (TP_test + FN_test)
+  }
+
+  return(list(
+    train_accuracy = train_accuracy_list, 
+    test_accuracy = test_accuracy_list,
+    train_recall = train_recall_list,
+    test_recall = test_recall_list
+  ))
+}
+
+# Read your data
+df <- read.csv(file="data.csv", sep=',', dec='.', header=TRUE)
+
+# Run the k-fold CV with Ridge regression
+results <- perform_k_fold_ridge_cv(df, 10)
+
+# Plotting the results
+par(mfrow = c(1, 2))
+boxplot(results$train_accuracy, ylab = "Accuracy", main = "Train Accuracy", ylim = c(0, 1))
+boxplot(results$test_accuracy, ylab = "Accuracy", main = "Test Accuracy", ylim = c(0, 1))
+par(mfrow = c(1, 2))
+boxplot(results$train_recall, ylab = "Recall", main = "Train Recall", ylim = c(0, 1))
+boxplot(results$test_recall, ylab = "Recall", main = "Test Recall", ylim = c(0, 1))
+
+
+```
+
+### 2.LASSO:
+
+```{r}
+library(glmnet)
+library(caret)
+
+set.seed(123)  # Ensure reproducibility
+
+
+
+# Fit lasso model
+lassomod = glmnet(as.matrix(X_train_scaled), Y_train, alpha = 1, family = 'binomial')
+plot(lassomod, xvar = 'lambda')
+
+# Perform cross-validation for lasso
+cv_fit_lasso <- cv.glmnet(as.matrix(X_train_scaled), Y_train, alpha = 1, type.measure = "deviance", nfolds = 10, grouped = FALSE)
+
+
+
+# Extracting lambda.min and lambda.1se for lasso
+lambda_min_lasso <- cv_fit_lasso$lambda.min
+lambda_1se_lasso <- cv_fit_lasso$lambda.1se
+lambda_min_lasso
+cv_fit_lasso$lambda
+```
+
+```{r}
+plot(cv_fit_lasso)
+# Assuming you have a cv.glmnet object named cv_fit
+# Extract the cross-validated mean deviance and the lambda values
+mean_deviance <- cv_fit_lasso$cvm
+log_lambdas <- log(cv_fit_lasso$lambda)
+
+# Plot the mean deviance against log(lambda)
+plot(log_lambdas, mean_deviance, type = "b", pch = 20, xlab = "Log(λ)", ylab = "Mean Deviance",
+     main = "Cross-Validated Mean Deviance vs. Log-Lambda")
+
+# Optionally, you can add vertical lines for lambda.min and lambda.1se
+abline(v = log(cv_fit_lasso$lambda.min), col = "blue", lty = 2)
+
+
+# Add a legend if desired
+legend("topright", legend = c("lambda.min"), col = c("blue"), lty = 2)
+```
+
+```{r}
+
+model_min_lasso <- glmnet(X_train_scaled, Y_train, alpha = 1, lambda =lambda_min_lasso)
+model_1se_lasso <- glmnet(X_train_scaled, Y_train, alpha = 1, lambda = 0.0810072)
+
+plot(model_1se_lasso)
+coef(model_1se_lasso)
+```
+
+```{r}
+
+# Predictions for lasso models
+predictions_min_lasso <- predict(model_min_lasso, newx =X_test_scaled, type = "response")
+predictions_1se_lasso <- predict(model_1se_lasso, newx = X_test_scaled, type = "response")
+
+# Converting predictions to binary class labels
+prediction_min_lasso <- ifelse(predictions_min_lasso > 0.5, 1, 0)
+prediction_1se_lasso <- ifelse(predictions_1se_lasso > 0.5, 1, 0)
+
+# Confusion Matrices for lasso models
+confusion_min_lasso <- table(Predicted = prediction_min_lasso, Actual = Y_test)
+confusion_1se_lasso <- table(Predicted = prediction_1se_lasso, Actual = Y_test)
+predictions_min_lasso
+predictions_1se_lasso
+
+
+confusion_min_lasso 
+confusion_1se_lasso 
+# Function to calculate metrics from a confusion matrix
+calculate_metrics <- function(conf_matrix) {
+    TN <- conf_matrix[1, 1]
+    FP <- conf_matrix[1, 2]
+    FN <- 0
+    TP <- 0
+
+    accuracy <- (TP + TN) / sum(conf_matrix)
+  
+    precision <- TP / (TP + FP)
+    return(list(accuracy = accuracy, precision = precision))
+}
+
+# Calculate metrics for lasso models
+metrics_min_lasso <- calculate_metrics(confusion_min_lasso)
+metrics_1se_lasso <- calculate_metrics(confusion_1se_lasso)
+
+# Print the metrics
+cat("Metrics for Lasso Model (lambda.min):\n")
+print(metrics_min_lasso)
+cat("\nMetrics for Lasso Model (lambda.1se):\n")
+print(metrics_1se_lasso)
+
+
+```
+
+```         
+SpMAD_Dt            0.024249621
+GATS7p             -0.022210140
+C2SP2               0.001379916
+EE_Dt               0.102329947
+ATSC1v              0.04690593
+(Intercept)        -0.69635069
+```
+
+Lasso didn't perform well because if we take a look at deviance error ploted to log(lambda).\
+the function is decreasing with a minimum reached at bigger positive log(lambdas)
+
+```{r}
+perform_k_fold_lasso_cv <- function(data, k) {
+  set.seed(123) # for reproducibility
+
+  # Create stratified folds
+  folds <- caret::createFolds(data$Class, k = k, list = TRUE)
+
+  train_accuracy_list <- numeric(k)
+  test_accuracy_list <- numeric(k)
+  train_recall_list <- numeric(k)  # To store train recall for each fold
+  test_recall_list <- numeric(k)   # To store test recall for each fold
+
+  for(i in 1:k) {
+    # Adjusting indices for stratified folds
+    test_indices <- folds[[i]]
+    
+    X_train = data[-test_indices, -ncol(data)]
+    Y_train = data$Class[-test_indices]
+    X_test = data[test_indices,-ncol(data)]
+    Y_test = data$Class[test_indices]
+    Y_test <- ifelse(Y_test == "Toxic", 1, 0)
+    Y_train <- ifelse(Y_train == "Toxic", 1, 0)
+    cat(Y_test,"\n zebi \n")
+    zero_percentage = colSums(X_train == 0) / nrow(X_train) * 100
+    columns_to_select = zero_percentage < 85  # Should be < 85 to select columns less than 85% zeros
+
+    X_train_wo_0 = X_train[, columns_to_select] 
+    X_test_wo_0 = X_test[, columns_to_select]
+    X_train_scaled = scale(X_train_wo_0, center = TRUE, scale = TRUE)
+    train_means <- attr(X_train_scaled, "scaled:center") # getting the means.
+    train_sds <- attr(X_train_scaled, "scaled:scale") # getting the stds.
+    X_test_scaled = scale(X_test_wo_0, center = train_means, scale = train_sds)
+
+    cv_lasso <- cv.glmnet(X_train_scaled, Y_train, alpha = 1, family = "binomial", grouped = FALSE)
+    lambda_min <- cv_lasso$lambda.min
+    lasso_min <- glmnet(X_train_scaled, Y_train, alpha = 1, lambda = lambda_min, family = 'binomial')
+
+    yhat_train <- predict(lasso_min, X_train_scaled, type = "response")
+    binary_predictions_train <- ifelse(yhat_train > 0.5, 1, 0)
+    train_accuracy_list[i] <- mean(binary_predictions_train == Y_train)
+    
+    # Calculate recall for the training set
+    TP_train <- sum(binary_predictions_train == 1 & Y_train == 1)
+    FN_train <- sum(binary_predictions_train == 0 & Y_train == 1)
+    train_recall_list[i] <- TP_train / (TP_train + FN_train)
+
+    yhat_test <- predict(lasso_min, X_test_scaled, type = "response")
+    binary_predictions_test <- ifelse(yhat_test > 0.5, 1, 0)
+    test_accuracy_list[i] <- mean(binary_predictions_test == Y_test)
+    
+    # Calculate recall for the test set
+    TP_test <- sum(binary_predictions_test == 1 & Y_test == 1)
+    FN_test <- sum(binary_predictions_test == 0 & Y_test == 1)
+    test_recall_list[i] <- TP_test / (TP_test + FN_test)
+  }
+
+  return(list(
+    train_accuracy = train_accuracy_list, 
+    test_accuracy = test_accuracy_list,
+    train_recall = train_recall_list,
+    test_recall = test_recall_list
+  ))
+}
+
+# Assuming 'df' is your data loaded from 'data.csv'
+results_lasso <- perform_k_fold_lasso_cv(df, 10)
+
+# Plotting the results
+par(mfrow = c(1, 2))
+boxplot(results_lasso$train_accuracy, ylab = "Accuracy", main = "Lasso Train Accuracy", ylim = c(0, 1))
+boxplot(results_lasso$test_accuracy, ylab = "Accuracy", main = "Lasso Test Accuracy", ylim = c(0, 1))
+par(mfrow = c(1, 2))
+boxplot(results_lasso$train_recall, ylab = "Recall", main = "Lasso Train Recall", ylim = c(0, 1))
+boxplot(results_lasso$test_recall, ylab = "Recall", main = "Lasso Test Recall", ylim = c(0, 1))
+
+```
+
+### 3.Elastic net : 
+
+```{r}
+perform_k_fold_elasticnet_cv <- function(data, k, alpha_value = 0.5) {
+  set.seed(123) # for reproducibility
+
+  # Create stratified folds
+  folds <- caret::createFolds(data$Class, k = k, list = TRUE)
+
+  train_accuracy_list <- numeric(k)
+  test_accuracy_list <- numeric(k)
+  train_recall_list <- numeric(k)  # To store train recall for each fold
+  test_recall_list <- numeric(k)   # To store test recall for each fold
+
+  for(i in 1:k) {
+    # Adjusting indices for stratified folds
+    test_indices <- folds[[i]]
+    
+    X_train = data[-test_indices, -ncol(data)]
+    Y_train = data$Class[-test_indices]
+    X_test = data[test_indices,-ncol(data)]
+    Y_test = data$Class[test_indices]
+    Y_test <- ifelse(Y_test == "Toxic", 1, 0)
+    Y_train <- ifelse(Y_train == "Toxic", 1, 0)
+
+    zero_percentage = colSums(X_train == 0) / nrow(X_train) * 100
+    columns_to_select = zero_percentage < 85
+
+    X_train_wo_0 = X_train[, columns_to_select] 
+    X_test_wo_0 = X_test[, columns_to_select]
+    X_train_scaled = scale(X_train_wo_0, center = TRUE, scale = TRUE)
+    X_test_scaled = scale(X_test_wo_0, center = attr(X_train_scaled, "scaled:center"), scale = attr(X_train_scaled, "scaled:scale"))
+
+    cv_elasticnet <- cv.glmnet(X_train_scaled, Y_train, alpha = alpha_value, family = "binomial", grouped = FALSE)
+    lambda_min <- cv_elasticnet$lambda.min
+    elasticnet_min <- glmnet(X_train_scaled, Y_train, alpha = alpha_value, lambda = lambda_min, family = 'binomial')
+
+    yhat_train <- predict(elasticnet_min, X_train_scaled, type = "response")
+    binary_predictions_train <- ifelse(yhat_train > 0.5, 1, 0)
+    train_accuracy_list[i] <- mean(binary_predictions_train == Y_train)
+    
+    # Calculate recall for the training set
+    TP_train <- sum(binary_predictions_train == 1 & Y_train == 1)
+    FN_train <- sum(binary_predictions_train == 0 & Y_train == 1)
+    train_recall_list[i] <- TP_train / (TP_train + FN_train)
+
+    yhat_test <- predict(elasticnet_min, X_test_scaled, type = "response")
+    binary_predictions_test <- ifelse(yhat_test > 0.5, 1, 0)
+    test_accuracy_list[i] <- mean(binary_predictions_test == Y_test)
+    
+    # Calculate recall for the test set
+    TP_test <- sum(binary_predictions_test == 1 & Y_test == 1)
+    FN_test <- sum(binary_predictions_test == 0 & Y_test == 1)
+    test_recall_list[i] <- TP_test / (TP_test + FN_test)
+  }
+
+  return(list(
+    train_accuracy = train_accuracy_list, 
+    test_accuracy = test_accuracy_list,
+    train_recall = train_recall_list,
+    test_recall = test_recall_list
+  ))
+}
+
+# Assuming 'df' is your data loaded from 'data.csv'
+results_elasticnet <- perform_k_fold_elasticnet_cv(df, 10, alpha_value = 0.6)  # You can change the alpha_value as needed
+
+# Plotting the results
+par(mfrow = c(1, 2))
+boxplot(results_elasticnet$train_accuracy, ylab = "Accuracy", main = "elastic net Train Accuracy", ylim = c(0, 1))
+boxplot(results_elasticnet$test_accuracy, ylab = "Accuracy", main = "elastic net Test Accuracy", ylim = c(0, 1))
+par(mfrow = c(1, 2))
+boxplot(results_elasticnet$train_recall, ylab = "Recall", main = "elastic net Train Recall", ylim = c(0, 1))
+boxplot(results_elasticnet$test_recall, ylab = "Recall", main = "elastic net Test Recall", ylim = c(0, 1))
+
+
+```
+
+```{r}
+library(caret)
+library(glmnet)
+library(smotefamily)
+ # This package contains the SMOTE function
+
+perform_k_fold_lasso_cv <- function(data, k, class_weight_ratio = c(1, 10)) {
+  set.seed(123)  # for reproducibility
+
+  # Create stratified folds
+  folds <- caret::createFolds(data$Class, k = k, list = TRUE)
+
+  train_accuracy_list <- numeric(k)
+  test_accuracy_list <- numeric(k)
+  train_recall_list <- numeric(k)  # To store train recall for each fold
+  test_recall_list <- numeric(k)   # To store test recall for each fold
+
+  for(i in 1:k) {
+    # Adjusting indices for stratified folds
+    test_indices <- folds[[i]]
+    
+    X_train = data[-test_indices, -ncol(data)]
+    Y_train = data$Class[-test_indices]
+    X_test = data[test_indices,-ncol(data)]
+    Y_test = data$Class[test_indices]
+    
+    # Apply SMOTE to the training data
+    train_data_smote <- smotefamily::SMOTE(X_train,Y_train, K = 5, dup_size = 100)
+    X_train_smote <- train_data_smote[, 1:(ncol(train_data_smote) - 1)]
+
+    Y_train_smote <- train_data_smote$Class
+    
+    # Convert factor to binary if necessary
+    Y_train_smote <- ifelse(Y_train_smote == "Toxic", 1, 0)
+    Y_test <- ifelse(Y_test == "Toxic", 1, 0)
+    
+    # Scale the data
+    X_train_scaled <- scale(X_train_smote)
+    train_means <- attr(X_train_scaled, "scaled:center")
+    train_sds <- attr(X_train_scaled, "scaled:scale")
+    X_test_scaled <- scale(X_test, center = train_means, scale = train_sds)
+    
+    # Calculate sample weights based on the provided class weight ratio
+    sample_weights <- ifelse(Y_train_smote == 1, class_weight_ratio[1], class_weight_ratio[2])
+    
+    # Perform Lasso regression with class weights
+    cv_lasso <- cv.glmnet(X_train_scaled, Y_train_smote, alpha = 1, family = "binomial", weights = sample_weights, grouped = FALSE)
+    lambda_min <- cv_lasso$lambda.min
+    lasso_min <- glmnet(X_train_scaled, Y_train_smote, alpha = 1, lambda = lambda_min, family = 'binomial', weights = sample_weights)
+    
+    yhat_train <- predict(lasso_min, X_train_scaled, type = "response")
+    binary_predictions_train <- ifelse(yhat_train > 0.5, 1, 0)
+    train_accuracy_list[i] <- mean(binary_predictions_train == Y_train_smote)
+    
+    # Calculate recall for the training set
+    TP_train <- sum(binary_predictions_train == 1 & Y_train_smote == 1)
+    FN_train <- sum(binary_predictions_train == 0 & Y_train_smote == 1)
+    train_recall_list[i] <- TP_train / (TP_train + FN_train)
+
+    yhat_test <- predict(lasso_min, X_test_scaled, type = "response")
+    binary_predictions_test <- ifelse(yhat_test > 0.5, 1, 0)
+    test_accuracy_list[i] <- mean(binary_predictions_test == Y_test)
+    
+    # Calculate recall for the test set
+    TP_test <- sum(binary_predictions_test == 1 & Y_test == 1)
+    FN_test <- sum(binary_predictions_test == 0 & Y_test == 1)
+    test_recall_list[i] <- TP_test / (TP_test + FN_test)
+  }
+
+  return(list(
+    train_accuracy = train_accuracy_list, 
+    test_accuracy = test_accuracy_list,
+    train_recall = train_recall_list,
+    test_recall = test_recall_list
+  ))
+}
+
+# Assuming 'df' is your data loaded from 'data.csv'
+df <- read.csv(file="data.csv", sep=',', dec='.', header=TRUE)
+
+# Calculate the class weights
+weight_non_toxic <- 1 / 0.68
+weight_toxic <- 1 / (1 - 0.68)
+
+# Normalize the weights so that the sum equals the number of classes
+sum_weights <- weight_non_toxic + weight_toxic
+normalized_weight_non_toxic <- (weight_non_toxic / sum_weights) * 2
+normalized_weight_toxic <- (weight_toxic / sum_weights) * 2
+
+# Apply the normalized weights to the model
+class_weight_ratio <- c(normalized_weight_toxic, normalized_weight_non_toxic)
+ # Adjust as needed for your problem
+results_lasso <- perform_k_fold_lasso_cv(df, 10, class_weight_ratio)
+
+# Plotting the results
+par(mfrow = c(1, 2))
+boxplot(results_lasso$train_accuracy, ylab = "Accuracy", main = "Lasso Train Accuracy", ylim = c(0, 1))
+boxplot(results_lasso$test_accuracy, ylab = "Accuracy", main = "Lasso Test Accuracy", ylim = c(0, 1))
+par(mfrow = c(1, 2))
+boxplot(results_lasso$train_recall, ylab = "Recall", main = "Lasso Train Recall", ylim = c(0, 1))
+boxplot(results_lasso$test_recall, ylab = "Recall", main = "Lasso Test Recall", ylim = c(0, 1))
+
+```
+
+## DECISION TREE:
+
+```{r}
+# Load the necessary library
+library(rpart)
+library(rpart.plot)
+
+# Assuming 'X_train_scaled' is your scaled training data and 'Y_train' is the target variable.
+# Similarly 'X_test_scaled' and 'Y_test' for your test data.
+
+# Step 1: Fit the Decision Tree Model
+# We fit the tree without specifying 'cp', so it will grow to its full size
+fit <- rpart(as.factor(Class) ~ ., data = train_data, method = "class")
+
+# Step 2: Test the Model
+# Make predictions on the training set
+predictions_train <- predict(fit, as.data.frame(X_train_scaled), type = "class")
+# Make predictions on the test set
+predictions_test <- predict(fit, as.data.frame(X_test_scaled), type = "class")
+
+# Calculate accuracy for train and test sets
+accuracy_train <- sum(predictions_train == as.factor(Y_train)) / length(Y_train)
+accuracy_test <- sum(predictions_test == as.factor(Y_test)) / length(Y_test)
+
+# Print out accuracy
+cat("Accuracy on training set:", accuracy_train, "\n")
+cat("Accuracy on test set:", accuracy_test, "\n")
+
+# Step 3: Plot the Tree
+# This will plot the full tree, which can be very large for high-dimensional data
+rpart.plot(fit, main = "Decision Tree", box.palette="RdBu", shadow.col="gray", cex=0.6)
+
+# You might need to adjust 'cex' to make the plot readable if the tree is very large
+```
+
+```{r}
+# Predictions on train and test sets as factors to ensure levels match Y_train and Y_test
+predictions_train <- factor(predict(fit, as.data.frame(X_train_scaled), type = "class"), levels = levels(as.factor(Y_train)))
+predictions_test <- factor(predict(fit, as.data.frame(X_test_scaled), type = "class"), levels = levels(as.factor(Y_test)))
+
+
+conf_matrix1 <- table(Predicted =predictions_train, Actual = Y_train)
+  
+
+TP <- conf_matrix1[2, 2]
+TN <- conf_matrix1[1, 1]
+FP <- conf_matrix1[1, 2]
+FN <- conf_matrix1[2, 1]
+
+conf_matrix1
+list(TP = TP, TN = TN, FP = FP, FN = FN)
+
+recall <- TP / (TP + FN)
+precision <- TP / (TP + FP)
+f1_score <- 2 * (precision * recall) / (precision + recall)
+accuracy <- (TP + TN) / (TP + TN + FP + FN)
+specificity <- TN / (TN + FP)
+
+# Print the results
+cat("Recall:", recall, "\n")
+cat("Precision:", precision, "\n")
+cat("F1 Score:", f1_score, "\n")
+cat("Accuracy:", accuracy, "\n")
+cat("Specificity:", specificity, "\n")
+
+```
+
+```{r}
+
+conf_matrix1 <- table(Predicted =predictions_test, Actual = Y_test)
+  
+
+TP <- conf_matrix1[2, 2]
+TN <- conf_matrix1[1, 1]
+FP <- conf_matrix1[1, 2]
+FN <- conf_matrix1[2, 1]
+
+conf_matrix1
+list(TP = TP, TN = TN, FP = FP, FN = FN)
+
+recall <- TP / (TP + FN)
+precision <- TP / (TP + FP)
+f1_score <- 2 * (precision * recall) / (precision + recall)
+accuracy <- (TP + TN) / (TP + TN + FP + FN)
+specificity <- TN / (TN + FP)
+
+# Print the results
+cat("Recall:", recall, "\n")
+cat("Precision:", precision, "\n")
+cat("F1 Score:", f1_score, "\n")
+cat("Accuracy:", accuracy, "\n")
+cat("Specificity:", specificity, "\n")
+
+```
+
+```{r}
+help("SMOTE", package = "smotefamily")
+```
